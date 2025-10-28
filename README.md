@@ -5,6 +5,9 @@ This repository contains a python package for Fast Multipole Methods.
 In progress
 
 
+# Notebooks 
+To avoid a bloated jupyter-repository only commit clean notebooks, e.i. run "Clear All Outputs" and "Restart" on the notebook before committing. 
+
 # Git commits i.e., Mind your Git manners
 The commit message is mainly for the other people, so they should be able to understand it now and six months later. Commit msg must only be one sentence and should start with a tag identifier (see end of this section).
 
