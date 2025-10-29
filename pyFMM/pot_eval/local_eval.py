@@ -3,15 +3,17 @@ import numpy as np
 from .. import utils as utils
 
 
-def P_L_moment(L, x_tgt):
+def P_L_sphe(L, x_tgt):
     """
     Evaluate potential at targets x_tgt from local expansion moments L.
+    Assumes L given in spherical harmonic basis.
+    Assumes x_tgt is given in spherical coordinates relative to the center of the local expansion
     inputs:
         L: local expansion moments flattened with index n^2 + n + m order.
         x_tgt: (Ntgt, 3) array of target positions in spherical coords (r, theta, phi).
-                spherical coord are assumed to be relative to the center of the local expansion.
+            where theta is the polar angle and phi the azimuthal angle.
     outputs:
-        P: (Ntgt,) array of potentials at target positions. 
+        P: (Ntgt,) array of potentials at target positions.
     """ 
     #------------ view of input array ----------------
     r = x_tgt[...,0]; theta = x_tgt[...,1]; phi = x_tgt[...,2]
