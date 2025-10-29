@@ -3,9 +3,11 @@ import numpy as np
 from .. import utils as utils
 
 
-def P_moment(M, x_tgt):
+def P_sphe(M, x_tgt):
     """
     Evaluate potential at targets x_tgt from multipole moments M.
+    Assumes M given in spherical harmonic basis.
+    Assumes x_tgt is given in spherical coordinates relative to the center of the multipole expansion.
     inputs:
         M: multipole moments flattened with index n^2 + n + m order.
         x_tgt: (Ntgt, 3) array of target positions in spherical coords (r, theta, phi).
