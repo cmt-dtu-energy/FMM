@@ -28,7 +28,7 @@ def M2M_sphe(M, x0, x1):
     #-------------------------------------------------
     #---------- get translation vector in spherical coords -------------
     x_diff = x0 - x1
-    rho, alpha, beta = cart_to_sphe(x_diff.reshape(1,3)).flatten()
+    rho, alpha, beta = utils.cart_to_sphe(x_diff.reshape(1,3)).flatten()
     #-------------------------------------------------------------------
     #---------- allocate output array -------------
     M_trans = np.zeros_like(M)
@@ -44,12 +44,12 @@ def M2M_sphe(M, x0, x1):
                     km = k - m
                     if abs(km) > jn:
                         continue
-                    O = M[lm_index(jn, km)]
+                    O = M[utils.lm_index(jn, km)]
                     phase = 1j**(abs(k) - abs(m) - abs(km))
-                    coeff = (phase * A_nm(jn, km) * A_nm(n, m) / A_nm(j, k)) * (rho**n)
-                    acc += O * coeff * sph_harm_dir(n, -m, alpha, beta)
+                    coeff = (phase * utils.A_nm(jn, km) * utils.A_nm(n, m) / utils.A_nm(j, k)) * (rho**n)
+                    acc += O * coeff * utils.sph_harm_dir(n, -m, alpha, beta)
             #----------------------------------------------
-            M_trans[lm_index(j, k)] = acc 
+            M_trans[utils.lm_index(j, k)] = acc 
         #----------------------------------------------
     #----------------------------------------------------------
     return M_trans
