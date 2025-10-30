@@ -94,6 +94,27 @@ class FMMTree:
         #-------------------------------------------------------
 
 
+    def make_child(self, node: TreeNode, child_center: np.ndarray) -> TreeNode:
+        """
+        Creates a single child node
+        """
+        # Determine which points belong to this child
+        in_child_mask = np.all(
+            np.abs(self.points[node.indices] - child_center) <= node.half_width / 2.0,
+            axis=1
+        )
+        child_indices = node.indices[in_child_mask]
+        # Create the child node
+        child_node = TreeNode(
+            tree=self,
+            center=child_center,
+            size=node.size / 2.0,
+            indices=child_indices,
+            level=node.level + 1
+        )
+        child_node.parent = node
+        return child_node
+
     def make_children_BFS(self, node: TreeNode):
         """
         Creates the full octree structure (replaces make_children_recursively),
@@ -127,23 +148,7 @@ class FMMTree:
                     + 0.5 * node.half_width * (2 * ((i >> 1) & 1) - 1) * np.array([0, 1, 0])
                     + 0.5 * node.half_width * (2 * ((i >> 2) & 1) - 1) * np.array([0, 0, 1])
                 )
-
-                # Determine which points belong to this child
-                in_child_mask = np.all(
-                    np.abs(self.points[node.indices] - child_center) <= node.half_width / 2.0,
-                    axis=1
-                )
-                child_indices = node.indices[in_child_mask]
-
-                # Create the child node
-                child_node = TreeNode(
-                    tree=self,
-                    center=child_center,
-                    size=node.size / 2.0,
-                    indices=child_indices,
-                    level=node.level + 1
-                )
-                child_node.parent = node
+                child_node = self.make_child(node, child_center)
                 node.children[i] = child_node
 
                 # Add to queue for future splitting
@@ -175,20 +180,9 @@ class FMMTree:
                                        + 0.5 * node.half_width * (2 * ((i >> 1) & 1) - 1) * np.array([0, 1, 0]) \
                                        + 0.5 * node.half_width * (2 * ((i >> 2) & 1) - 1) * np.array([0, 0, 1])
             #----------------------------------------------------
-            #-------------- find all point indices inside child --------------
-            in_child_mask = np.all( np.abs(self.points[node.indices] - child_center) <= node.half_width / 2.0, axis=1)  
-            child_indices = node.indices[in_child_mask]     
-            #----------------------------------------------------------------- 
-            #------------------ create child node ----------------------------
-            child_node = TreeNode(
-                tree=self,
-                center=child_center,
-                size=node.size / 2.0,
-                indices=child_indices,
-                level=node.level + 1
-            )
-            child_node.parent = node
-            #------------------------------------------------------------------
+            #--------------- create child node -------------------
+            child_node = self.make_child(node, child_center)
+            #------------------------------------------------------
             #-------------- update parent child list with new child --------------
             node.children[i] = child_node
             #----------------------------------------------------------------------
