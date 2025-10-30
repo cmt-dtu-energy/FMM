@@ -2,6 +2,7 @@
 #------------- needed to allow FMMTree type hints inside TreeNode -------------
 from __future__ import annotations
 from collections import deque
+import itertools
 #-----------------------------------------------------------------------------
 
 
@@ -25,18 +26,19 @@ from typing import List, Optional, Iterable
 class TreeNode:
     """Lightweight octree/quadtree node for FMM. Holds indices into global point arrays."""
     def __init__(self, tree: FMMTree, center: np.ndarray, size: np.ndarray, indices: np.ndarray, level: int = 0):
-        self.center = center            # np.array([x,y,z])
-        self.size = size                # np.array([sx,sy,sz])
-        self.half_width = np.max(size) / 2.0    # float
+        self.center = np.asarray(center, dtype=float)   # np.array([x,y,z])
+        self.size = np.asarray(size, dtype=float)       # np.array([sx,sy,sz])
+        # per-dimension half widths (array) — used for collapsed-dimension handling
+        self.half_width = self.size / 2.0
         self.indices = indices          # np.array of source/target indices inside node
         self.num_points = len(indices)  # 
         self.level = level
-        self.children: List[Optional[TreeNode]] = [None]*8
+        # allocate children based on how many active dimensions the tree has
+        n_active = int(2 ** int(sum(getattr(tree, "do_dimension", [True, True, True]))))
+        self.children: List[Optional[TreeNode]] = [None] * n_active
         self.parent: Optional[TreeNode] = None
         self.is_leaf = True
         self.tree = tree
-
-
 
         # storage for multipole/local expansions (complex arrays)
         self.M = None   # multipole coefficients
@@ -65,6 +67,11 @@ class FMMTree:
         self.root: Optional[TreeNode] = None
         self.node_list : List[TreeNode] = []
         self.p = p  # multipole order
+        # tolerance for collapsing near-zero dimensions; dimensions with
+        # size <= collapse_tol are considered collapsed (ignored)
+        self.collapse_tol = 1e-6
+        # default do_dimension (all true) — will be updated in build_tree
+        self.do_dimension = [True, True, True]
 
 
     def build_tree(self, BFS: bool = True):
@@ -74,6 +81,17 @@ class FMMTree:
         2. Recursively subdivide nodes until max level or leaf size reached.
         3. Store nodes in self.node_list in depth-first order.
         """
+        # decide which dimensions are active (collapsed dims are ignored)
+        sz = np.asarray(self.size, dtype=float)
+        do_dim = [bool(s > self.collapse_tol) for s in sz]
+        # ensure at least one dimension remains active
+        if not any(do_dim):
+            raise ValueError(
+                "All dimensions are collapsed (size <= collapse_tol); provide a non-zero "
+                "size in at least one dimension or decrease collapse_tol."
+            )
+        self.do_dimension = do_dim
+
         #--------------- first create root node ---------------
         root_node = TreeNode(
             tree=self,
@@ -98,11 +116,16 @@ class FMMTree:
         """
         Creates a single child node
         """
-        # Determine which points belong to this child
-        in_child_mask = np.all(
-            np.abs(self.points[node.indices] - child_center) <= node.half_width / 2.0,
-            axis=1
-        )
+        # Determine which points belong to this child.
+        # Only consider active (non-collapsed) dimensions when testing membership.
+        active = np.asarray(self.do_dimension, dtype=bool)
+        child_half = node.half_width / 2.0
+        diffs = np.abs(self.points[node.indices] - child_center)
+        if active.all():
+            in_child_mask = np.all(diffs <= child_half, axis=1)
+        else:
+            # compare only along active dimensions
+            in_child_mask = np.all(diffs[:, active] <= child_half[active], axis=1)
         child_indices = node.indices[in_child_mask]
         # Create the child node
         child_node = TreeNode(
@@ -139,18 +162,17 @@ class FMMTree:
             # Split current node
             node.is_leaf = False
 
-            # Create children nodes
-            for i in range(8):
-                # Compute child center (your original logic preserved)
-                child_center = (
-                    node.center
-                    + 0.5 * node.half_width * (2 * (i & 1) - 1) * np.array([1, 0, 0])
-                    + 0.5 * node.half_width * (2 * ((i >> 1) & 1) - 1) * np.array([0, 1, 0])
-                    + 0.5 * node.half_width * (2 * ((i >> 2) & 1) - 1) * np.array([0, 0, 1])
-                )
+            # Create children nodes. Use only active dimensions when forming combinations.
+            active_dims = [d for d, flag in enumerate(self.do_dimension) if flag]
+            n_children = 2 ** len(active_dims)
+            # ensure children list has correct length
+            node.children = [None] * n_children
+            for idx, signs in enumerate(itertools.product([-1, 1], repeat=len(active_dims))):
+                child_center = node.center.copy()
+                for d, s in zip(active_dims, signs):
+                    child_center[d] += 0.5 * node.half_width[d] * s
                 child_node = self.make_child(node, child_center)
-                node.children[i] = child_node
-
+                node.children[idx] = child_node
                 # Add to queue for future splitting
                 q.append(child_node)
 
@@ -174,17 +196,19 @@ class FMMTree:
         node.is_leaf = False
         #--------------------------------------------------------------
         #--------------- create children nodes ------------------------
-        for i in range(8):
-            #--------------- compute child center ----------------
-            child_center = node.center + 0.5 * node.half_width * (2 * (i & 1) - 1) * np.array([1, 0, 0]) \
-                                       + 0.5 * node.half_width * (2 * ((i >> 1) & 1) - 1) * np.array([0, 1, 0]) \
-                                       + 0.5 * node.half_width * (2 * ((i >> 2) & 1) - 1) * np.array([0, 0, 1])
+        active_dims = [d for d, flag in enumerate(self.do_dimension) if flag]
+        n_children = 2 ** len(active_dims)
+        node.children = [None] * n_children
+        for idx, signs in enumerate(itertools.product([-1, 1], repeat=len(active_dims))):
+            child_center = node.center.copy()
+            for d, s in zip(active_dims, signs):
+                child_center[d] += 0.5 * node.half_width[d] * s
             #----------------------------------------------------
             #--------------- create child node -------------------
             child_node = self.make_child(node, child_center)
             #------------------------------------------------------
             #-------------- update parent child list with new child --------------
-            node.children[i] = child_node
+            node.children[idx] = child_node
             #----------------------------------------------------------------------
         #--------------------------------------------------------------
         #--------------- free memory ---------------
