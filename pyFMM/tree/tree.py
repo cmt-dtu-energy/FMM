@@ -52,7 +52,7 @@ class FMMTree:
                  points: np.ndarray,
                  charges: np.ndarray,
                  p: int = 4,
-                 max_leaf_size: int = 64,
+                 min_leaf_size: int = 10,
                  max_level: int = 5):
         """
         points: (N,3) source/target coordinates
@@ -62,7 +62,9 @@ class FMMTree:
         self.charges = np.asarray(charges)
         self.center = np.asarray(center)
         self.size = np.asarray(size)
-        self.max_leaf_size = int(max_leaf_size)
+        # minimum number of points per leaf; if a child has fewer than
+        # this many points the parent may reclaim them during pruning
+        self.min_leaf_size = int(min_leaf_size)
         self.max_level = int(max_level)
         self.root: Optional[TreeNode] = None
         self.node_list : List[TreeNode] = []
@@ -306,6 +308,80 @@ class FMMTree:
             next_level = [child for parent in this_level for child in self._iter_children(parent)]
             q.extend(next_level)
             #-----------------------------------------------------
+
+
+
+    def rebuild_node_list(self):
+        """Rebuild self.node_list using BFS from the root."""
+        self.node_list = []
+        if self.root is None:
+            return
+        q = deque([self.root])
+        while q:
+            n = q.popleft()
+            self.node_list.append(n)
+            for c in getattr(n, "children", ()):  # type: ignore
+                if c is not None:
+                    q.append(c)
+
+    def prune_tree(self):
+        """Prune small children: starting from second-lowest level, collapse parents whose
+        children contain too few points. If any child has fewer than `min_leaf_size` points,
+        the parent reclaims all particle indices from its children and the children are removed.
+
+        After pruning, the node list and near-neighbor lists are rebuilt.
+        """
+        # collect nodes by level
+        levels = {}
+        stack = [self.root]
+        while stack:
+            node = stack.pop()
+            if node is None:
+                continue
+            levels.setdefault(node.level, []).append(node)
+            for c in getattr(node, "children", ()):  # type: ignore
+                if c is not None:
+                    stack.append(c)
+
+        if not levels:
+            return
+
+        max_lvl = max(levels.keys())
+        second_lowest = max_lvl - 1
+        # iterate from second-lowest down to root
+        for lvl in range(second_lowest, -1, -1):
+            for node in levels.get(lvl, []):
+                children = getattr(node, "children", ())
+                if not children:
+                    continue
+                # if any child has fewer than min_leaf_size, collapse
+                collapse = False
+                for child in children:
+                    if child is None:
+                        continue
+                    child_num = getattr(child, "num_points", None)
+                    if child_num is None:
+                        child_num = 0 if getattr(child, "indices", None) is None else len(child.indices)
+                    if child_num < self.min_leaf_size:
+                        collapse = True
+                        break
+                if collapse:
+                    # collect indices from children
+                    inds = [c.indices for c in children if c is not None and getattr(c, "indices", None) is not None]
+                    if inds:
+                        all_indices = np.concatenate(inds)
+                    else:
+                        all_indices = np.array([], dtype=int)
+                    node.indices = all_indices
+                    node.num_points = len(all_indices)
+                    node.is_leaf = True
+                    # remove children
+                    node.children = [None] * len(children)
+
+        # rebuild node list and recompute neighbor lists
+        self.rebuild_node_list()
+        self.make_near_neighbors_lists()
+
 
     def upwards_pass(self, node: TreeNode):
         """
