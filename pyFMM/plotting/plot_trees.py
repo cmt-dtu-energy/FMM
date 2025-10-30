@@ -56,12 +56,79 @@ def _gather_leaves(tree):
                     stack.append(c)
 
 
-def plot_tree_2D(tree, axis: Optional[object] = None, edgecolor: str = "k", facecolor: Optional[str] = "none", linewidth: float = 1.0, **kwargs) -> Tuple[Optional[object], object]:
+def plot_neighbors_node_on_axis(node, axis, node_color: str = "green", neighbor_color: str = "red", alpha: float = 0.3, **kwargs):
+    """Highlight `node` (green by default) and its near neighbors (red) on the provided axis.
+
+    This function always requires an `axis` argument and will not create a new figure.
+    Style options for the patches can be provided via kwargs.
+    """
+    if axis is None:
+        raise ValueError("An axis must be provided; this function does not create figures")
+    # determine active dims from the tree attached to node
+    tree = getattr(node, 'tree', None)
+    if tree is None:
+        raise ValueError("Provided node does not reference a parent tree via node.tree")
+    do_dim = getattr(tree, 'do_dimension', [True, True, True])
+    active_dims = [i for i, v in enumerate(do_dim) if v]
+    if len(active_dims) != 2:
+        raise NotImplementedError("Neighbor plotting only implemented for 2 active dimensions")
+
+    # helper to draw a node rectangle
+    def _draw_node(n, color):
+        c = np.asarray(n.center, dtype=float)
+        hw = np.asarray(n.half_width, dtype=float)
+        x0 = c[active_dims[0]] - hw[active_dims[0]]
+        y0 = c[active_dims[1]] - hw[active_dims[1]]
+        w = 2.0 * hw[active_dims[0]]
+        h = 2.0 * hw[active_dims[1]]
+        rect = Rectangle((x0, y0), w, h, edgecolor=color, facecolor=color, alpha=alpha, **kwargs)
+        axis.add_patch(rect)
+
+    # draw main node
+    _draw_node(node, node_color)
+    # draw neighbors
+    for n in getattr(node, 'neighbors', ()):  # type: ignore
+        if n is node:
+            continue
+        _draw_node(n, neighbor_color)
+
+
+def plot_neighbors_point_on_axis(point, tree, axis, node_color: str = "green", neighbor_color: str = "red", alpha: float = 0.3, **kwargs):
+    """Find the leaf containing `point` and highlight it and its neighbors on `axis`.
+
+    `point` may be a float (1D), sequence of 2 (2D) or 3 (3D) numbers. The function
+    will validate that the number of provided coordinates matches the number of active dimensions.
+    """
+    if axis is None:
+        raise ValueError("An axis must be provided; this function does not create figures")
+    do_dim = np.asarray(getattr(tree, 'do_dimension', [True, True, True]), dtype=bool)
+    n_active = int(do_dim.sum())
+    p = np.asarray(point, dtype=float)
+    if p.ndim == 0:
+        p = np.asarray([p])
+    if not (p.size == n_active or p.size == 3):
+        raise ValueError(f"Point dimensionality ({p.size}) does not match number of active dimensions ({n_active})")
+
+    node = tree.find_leaf_for_point(p)
+    if node is None:
+        return None
+    plot_neighbors_node_on_axis(node, axis, node_color=node_color, neighbor_color=neighbor_color, alpha=alpha, **kwargs)
+    return node
+
+
+def plot_tree_2D(tree, axis: Optional[object] = None, **kwargs) -> Tuple[Optional[object], object]:
     """Plot a 2D projection of the tree: draw rectangles for every leaf node.
+
+    All drawing/style options (edgecolor, facecolor, linewidth, alpha, etc.)
+    should be provided via `kwargs`. Defaults are applied when not provided.
 
     The two active dimensions are taken from `tree.do_dimension` order (x,y,z).
     Returns (fig, ax) when a new figure was created, else (None, ax).
     """
+    # style defaults (consumed from kwargs)
+    edgecolor = kwargs.pop("edgecolor", "k")
+    facecolor = kwargs.pop("facecolor", "none")
+    linewidth = kwargs.pop("linewidth", 1.0)
     if plt is None:
         raise RuntimeError("matplotlib is required for plotting (install matplotlib)")
 
@@ -99,6 +166,11 @@ def plot_tree_2D(tree, axis: Optional[object] = None, edgecolor: str = "k", face
         ax.set_ylim(center[active_dims[1]] - size[active_dims[1]] / 2.0, center[active_dims[1]] + size[active_dims[1]] / 2.0)
     except Exception:
         pass
+
+    # set axis labels based on active dimensions ('x','y','z')
+    labels = ["x", "y", "z"]
+    ax.set_xlabel(labels[active_dims[0]])
+    ax.set_ylabel(labels[active_dims[1]])
 
     if created_fig:
         return fig, ax
