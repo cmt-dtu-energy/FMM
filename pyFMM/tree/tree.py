@@ -232,6 +232,56 @@ class FMMTree:
             if c is not None:
                 yield c
 
+    def find_leaf_for_point(self, point) -> Optional[TreeNode]:
+        """Return the leaf node that contains `point` or None if point is outside the root.
+
+        `point` can be an iterable or array with 1-3 elements; only active dimensions
+        (self.do_dimension) are considered. If the point is outside the root domain
+        along any active dimension, returns None.
+        """
+        if self.root is None:
+            return None
+
+        p = np.asarray(point, dtype=float)
+        do_dim = np.asarray(self.do_dimension, dtype=bool)
+        # allow 1D/2D/3D input matching active dims
+        if p.ndim == 0:
+            p = np.asarray([p])
+        if p.size != do_dim.sum():
+            # try to accept full 3-element points by picking active dims
+            if p.size == 3:
+                full_p = p
+            else:
+                return None
+        else:
+            # expand p to full 3-vector using active dims
+            full_p = np.zeros(3, dtype=float)
+            full_p[do_dim] = p
+
+        # check inside root
+        root = self.root
+        hw = root.half_width
+        if not np.all(np.abs(full_p - root.center)[do_dim] <= hw[do_dim]):
+            return None
+
+        node = root
+        # descend until a leaf is reached
+        while not node.is_leaf:
+            found = False
+            for child in getattr(node, 'children', ()):
+                if child is None:
+                    continue
+                ch_center = np.asarray(child.center, dtype=float)
+                ch_hw = np.asarray(child.half_width, dtype=float)
+                if np.all(np.abs(full_p - ch_center)[do_dim] <= ch_hw[do_dim]):
+                    node = child
+                    found = True
+                    break
+            if not found:
+                # point not found in any child — return None
+                return None
+        return node
+
     def is_near_neighbor(self, node_a: TreeNode, node_b: TreeNode, pad: float = 1.01) -> bool:
         """
         Axis-aligned bounding boxes touch/overlap test.
@@ -331,6 +381,10 @@ class FMMTree:
 
         After pruning, the node list and near-neighbor lists are rebuilt.
         """
+
+        #TODO - does not properly set nearest nbors after pruning
+
+
         # collect nodes by level
         levels = {}
         stack = [self.root]
