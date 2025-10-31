@@ -3,6 +3,7 @@
 from __future__ import annotations
 from collections import deque
 import itertools
+from platform import node
 #-----------------------------------------------------------------------------
 
 
@@ -17,6 +18,12 @@ try:
     from .. import moment as moment
 except Exception:
     import moment as moment  # type: ignore
+
+try:
+    # import the utils module so we don't pollute this module's namespace
+    from .. import pot_eval as pot_eval
+except Exception:
+    import pot_eval as pot_eval  # type: ignore
 #-----------------------------------------------------------------------------
 
 import numpy as np
@@ -449,6 +456,13 @@ class FMMTree:
                 self._upwards_pass(child)
         #--------------------------------------------------
         if node.is_leaf:
+            #----------- handle empty leaf case -------------
+            if node.is_leaf:
+                if node.indices.size == 0:
+                    node.M = np.zeros(((self.p+1)**2,), dtype=np.complex128)
+                    return
+            #------------------------------------------------------------
+
             #------------ if leaf, compute P2M ot get moments -------------
             X = self.points[node.indices]
             q = self.charges[node.indices]
@@ -461,13 +475,13 @@ class FMMTree:
             #----------- else, use M2M to aggregate child moments -------------
             node.M = np.zeros(((self.p+1)**2,), dtype=np.complex128)
             for child in node.children:
-                x1 = node.center
-                x0 = child.center
-                node.M += moment.M2M_sphe(child.M, x0, x1)
+                if child is None or getattr(child, 'M', None) is None:
+                    continue
+                node.M += moment.M2M_sphe(child.M, child.center, node.center)
             #------------------------------------------------------------------
 
 
-    def _downwards_pass(self, node: TreeNode):
+    def _downwards_pass(self, root: TreeNode):
         """
         Creates the full octree structure (replaces make_children_recursively),
         but builds level-by-level instead of depth-first recursion.
@@ -475,16 +489,19 @@ class FMMTree:
         #self.node_list = []  # we now fill this BFS-ordered
 
         # Queue for BFS
-        q = deque([node])
+
+        root.L = np.zeros(((self.p+1)**2,), dtype=np.complex128)
+        q = deque([root])
         while q:
             #-------------- get next node ----------------
             node = q.popleft()
+            #if node.L is None:
+            #    node.L = np.zeros(((self.p+1)**2,), dtype=np.complex128)
             #---------------------------------------------
             #------------------ convert multipole to local for each node in interaction list -------------------
             for i_node in node.interaction:
-                if node.L is None:
-                    node.L = np.zeros(((self.p+1)**2,), dtype=np.complex128)
                 node.L += moment.M2L_sphe(i_node.M, i_node.center, node.center)
+
             #----------------------------------------------------------------------------------------------------
             #-------------- if this is a leaf continue to next node in queue -------------------
             if node.is_leaf:
@@ -494,7 +511,43 @@ class FMMTree:
             for child in node.children:
                 if child is None:
                     continue
-                if node.L is not None:
-                    child.L = moment.L2L_sphe(node.L, node.center, child.center)
+                #if node.L is not None:
+                child.L = moment.L2L_sphe(node.L, node.center, child.center)
                 q.append(child)
             #----------------------------------------------------------------------------------------------------
+
+    
+
+    def eval_P(self, eval_points: np.ndarray) -> np.ndarray:
+        """
+        Evaluate the multipole expansions at given evaluation points.
+        """
+        all_P = np.zeros(eval_points.shape[0], dtype=float)
+
+        for i, point in enumerate(eval_points):
+            #P = 0
+            leaf = self.find_leaf_for_point(point)
+            if leaf is None:
+                raise ValueError(f"Point {point} is outside the tree domain.")
+   
+
+            #--------- evaluate local expansion from interaction list -------------
+            points_rel = point - leaf.center
+            points_rel_sphe = utils.cart_to_sphe(points_rel.reshape(1,3))[0]
+            all_P[i] = pot_eval.P_L_sphe(leaf.L, points_rel_sphe)[0]
+            #-----------------------------------------------------------------------
+            #--------- evaluate direct sum from near neighbors -------------
+            near_neighbors = getattr(leaf, 'neighbors', ())
+            for n_node in near_neighbors:
+                if n_node is None:
+                    continue
+                src_indices = n_node.indices
+                X_src = self.points[src_indices]
+                q_src = self.charges[src_indices]
+
+                P_loc = pot_eval.P_direct_cart(X_src, q_src, np.array([point]))[0]
+                all_P[i] += P_loc
+            #--------------------------------------------------------------
+
+            #all_P[i] = P
+        return all_P
