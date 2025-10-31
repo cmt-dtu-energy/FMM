@@ -38,19 +38,21 @@ def M2L_sphe(M, x0, x1):
     for j in range(p+1):
         for k in range(-j, j+1):
             acc = 0.0 + 0.0j
+            A_kj = utils.A_nm(j, k)
             #----------- inner loops over input multipole moments -------------
             for n in range(0, p+1):
                 jn = j + n
                 #--------- r^( -(jn + 1) ) term ----------------
                 rho_pow = 1.0 / ( rho**(jn + 1) )
                 #-----------------------------------------------
+
+                one_coeff = (-1)**n
+
                 for m in range(-n, n+1):
                     mk = m - k
                     O = M[utils.lm_index(n, m)]
                     phase = 1j**( abs(mk) - abs(k) - abs(m) )
-                    coeff = utils.A_nm(n,m) * utils.A_nm(j,k) / ( utils.A_nm(jn, mk) )
-                    one_coeff = (-1)**n
-
+                    coeff = utils.A_nm(n,m) * A_kj / ( utils.A_nm(jn, mk) )
                     Y = utils.sph_harm_dir(jn, mk, alpha, beta)
                     acc += O * coeff * one_coeff * phase * rho_pow * Y
             #---------------------------------------------------------------
