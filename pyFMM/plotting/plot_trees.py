@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover - matplotlib may not be available in edito
     plt = None  # type: ignore
     Rectangle = None  # type: ignore
 import numpy as np
+import warnings
 
 
 def plot_tree(tree, axis: Optional[object] = None, **kwargs) -> Tuple[Optional[object], object]:
@@ -113,6 +114,65 @@ def plot_neighbors_point_on_axis(point, tree, axis, node_color: str = "green", n
     if node is None:
         return None
     plot_neighbors_node_on_axis(node, axis, node_color=node_color, neighbor_color=neighbor_color, alpha=alpha, **kwargs)
+    return node
+
+
+def plot_interaction_node_on_axis(node, axis, node_color: str = "green", interaction_color: str = "blue", alpha: float = 0.3, **kwargs):
+    """Highlight `node` and its interaction list on the provided axis.
+
+    Requires an `axis` argument and will not create a new figure.
+    """
+    if axis is None:
+        raise ValueError("An axis must be provided; this function does not create figures")
+    tree = getattr(node, 'tree', None)
+    if tree is None:
+        raise ValueError("Provided node does not reference a parent tree via node.tree")
+    do_dim = getattr(tree, 'do_dimension', [True, True, True])
+    active_dims = [i for i, v in enumerate(do_dim) if v]
+    if len(active_dims) != 2:
+        raise NotImplementedError("Interaction plotting only implemented for 2 active dimensions")
+
+    def _draw(n, color):
+        c = np.asarray(n.center, dtype=float)
+        hw = np.asarray(n.half_width, dtype=float)
+        x0 = c[active_dims[0]] - hw[active_dims[0]]
+        y0 = c[active_dims[1]] - hw[active_dims[1]]
+        w = 2.0 * hw[active_dims[0]]
+        h = 2.0 * hw[active_dims[1]]
+        rect = Rectangle((x0, y0), w, h, edgecolor=color, facecolor=color, alpha=alpha, **kwargs)
+        axis.add_patch(rect)
+    # ensure interaction list exists
+    interaction = getattr(node, 'interaction', None)
+    if interaction is None:
+        warnings.warn("Node interaction list not available; skipping automatic computation.", UserWarning)
+        interaction = ()
+
+    # draw node and interaction boxes
+    _draw(node, node_color)
+    for n in interaction:
+        _draw(n, interaction_color)
+        _draw(n, interaction_color)
+
+
+def plot_interaction_point_on_axis(point, tree, axis, node_color: str = "green", interaction_color: str = "blue", alpha: float = 0.3, **kwargs):
+    """Find the leaf containing `point` and highlight its interaction list on `axis`.
+    Returns the found node or None.
+    """
+    if axis is None:
+        raise ValueError("An axis must be provided; this function does not create figures")
+    do_dim = np.asarray(getattr(tree, 'do_dimension', [True, True, True]), dtype=bool)
+    n_active = int(do_dim.sum())
+    p = np.asarray(point, dtype=float)
+    if p.ndim == 0:
+        p = np.asarray([p])
+    if not (p.size == n_active or p.size == 3):
+        raise ValueError(f"Point dimensionality ({p.size}) does not match number of active dimensions ({n_active})")
+
+    node = tree.find_leaf_for_point(p)
+    if node is None:
+        return None
+    # remove neighbor coloring and draw interaction list instead (call interaction plot)
+    plot_interaction_node_on_axis(node, axis, node_color=node_color, interaction_color=interaction_color, alpha=alpha, **kwargs)
     return node
 
 
