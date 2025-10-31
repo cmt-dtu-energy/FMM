@@ -108,13 +108,13 @@ class FMMTree:
         #-------------------------------------------------------
         #--------------- recursively build tree ----------------
         if BFS:
-            self.make_children_BFS(root_node)
+            self._make_children_BFS(root_node)
         else:
-            self.make_children_DFS(root_node)
+            self._make_children_DFS(root_node)
         #-------------------------------------------------------
 
 
-    def make_child(self, node: TreeNode, child_center: np.ndarray) -> TreeNode:
+    def _make_child(self, node: TreeNode, child_center: np.ndarray) -> TreeNode:
         """
         Creates a single child node
         """
@@ -140,7 +140,7 @@ class FMMTree:
         child_node.parent = node
         return child_node
 
-    def make_children_BFS(self, node: TreeNode):
+    def _make_children_BFS(self, node: TreeNode):
         """
         Creates the full octree structure (replaces make_children_recursively),
         but builds level-by-level instead of depth-first recursion.
@@ -173,7 +173,7 @@ class FMMTree:
                 child_center = node.center.copy()
                 for d, s in zip(active_dims, signs):
                     child_center[d] += 0.5 * node.half_width[d] * s
-                child_node = self.make_child(node, child_center)
+                child_node = self._make_child(node, child_center)
                 node.children[idx] = child_node
                 # Add to queue for future splitting
                 q.append(child_node)
@@ -181,7 +181,7 @@ class FMMTree:
             # Free memory on internal node
             node.indices = []  # same as your original
 
-    def make_children_DFS(self, node: TreeNode):
+    def _make_children_DFS(self, node: TreeNode):
         """
         Recursively creates child nodes for the octree.
         """
@@ -207,7 +207,7 @@ class FMMTree:
                 child_center[d] += 0.5 * node.half_width[d] * s
             #----------------------------------------------------
             #--------------- create child node -------------------
-            child_node = self.make_child(node, child_center)
+            child_node = self._make_child(node, child_center)
             #------------------------------------------------------
             #-------------- update parent child list with new child --------------
             node.children[idx] = child_node
@@ -282,7 +282,7 @@ class FMMTree:
                 return None
         return node
 
-    def compute_interaction_list(self, node: TreeNode):
+    def _compute_interaction_list(self, node: TreeNode):
         """Compute and return the interaction list for `node`.
 
         Definition (informal): children of the near-neighbours of node's parent
@@ -296,12 +296,12 @@ class FMMTree:
         # ensure neighbor lists exist for parent
         if not hasattr(parent, 'neighbors') or not parent.neighbors:
             # build global neighbor lists (cheap if already built)
-            self.make_near_neighbors_lists()
+            self._make_near_neighbors_lists()
 
         interaction = set()
         # ensure node.neighbors exists
         if not hasattr(node, 'neighbors') or not node.neighbors:
-            self.find_near_neighbors(node)
+            self._find_near_neighbors(node)
 
         for Pn in getattr(parent, 'neighbors', ()):  # type: ignore
             # skip if neighbour has no children
@@ -314,29 +314,24 @@ class FMMTree:
                 # exclude near neighbours of node (we want well-separated boxes only)
                 if child in getattr(node, 'neighbors', ()):  # type: ignore
                     continue
-                # finally, check adjacency using is_near_neighbor to be safe
-                if not self.is_near_neighbor(child, node):
+                # finally, check adjacency using _is_near_neighbor to be safe
+                if not self._is_near_neighbor(child, node):
                     interaction.add(child)
 
         # store on node for later use
         node.interaction = interaction
         return interaction
 
-    def compute_all_interaction_lists(self):
+    def _compute_all_interaction_lists(self):
         """Compute interaction lists for all nodes in the tree and store them as node.interaction."""
         if not self.node_list:
-            self.rebuild_node_list()
-        # ensure neighbor lists are present
+            self._rebuild_node_list()
         for node in self.node_list:
-            node.interaction = self.compute_interaction_list(node)
+            node.interaction = self._compute_interaction_list(node)
 
 
-    def make_lists(self):
-        """Build both near-neighbor lists and interaction lists for all nodes in the tree."""
-        self.make_near_neighbors_lists()
-        self.compute_all_interaction_lists()
-
-    def is_near_neighbor(self, node_a: TreeNode, node_b: TreeNode, pad: float = 1.01) -> bool:
+    # (internal) near-neighbour helper
+    def _is_near_neighbor(self, node_a: TreeNode, node_b: TreeNode, pad: float = 1.01) -> bool:
         """
         Axis-aligned bounding boxes touch/overlap test.
         pad > 1 expands node_a's half-widths to get a 'near' halo.
@@ -349,7 +344,7 @@ class FMMTree:
         h2 = np.asarray(node_b.half_width, dtype=float)
         return np.all(np.abs(c1 - c2) <= (h1 + h2))
 
-    def find_near_neighbors(self, node, pad: float = 1.01):
+    def _find_near_neighbors(self, node, pad: float = 1.01):
         """
         Build node.neighbors using the parent's neighbors (assumes those exist).
         Includes the node itself in the set.
@@ -363,7 +358,7 @@ class FMMTree:
         if parent is not None:
             #------------ first check siblings (e.i. nodes with same parent) -------------
             for sib in self._iter_children(parent):
-                if sib is not node and self.is_near_neighbor(node, sib, pad=pad):
+                if sib is not node and self._is_near_neighbor(node, sib, pad=pad):
                     neigh.add(sib)
             #-----------------------------------------------------------------------------
             #----------- check parents neighbohrs (Pn) ------------------------
@@ -372,18 +367,18 @@ class FMMTree:
                     continue
                 #-------------- if Pn is leaf ----------------
                 if Pn.is_leaf:
-                    if self.is_near_neighbor(node, Pn, pad=pad):
+                    if self._is_near_neighbor(node, Pn, pad=pad):
                         neigh.add(Pn)
                 #----------------------------------------------
                 #---------- if Pn is not leaf iterate over its children -------------
                 else:
                     for cousin in self._iter_children(Pn):
-                        if self.is_near_neighbor(node, cousin, pad=pad):
+                        if self._is_near_neighbor(node, cousin, pad=pad):
                             neigh.add(cousin)
                 #--------------------------------------------------------------------
         node.neighbors = neigh  
 
-    def make_near_neighbors_lists(self, pad: float = 1.01):
+    def _make_near_neighbors_lists(self, pad: float = 1.01):
         """
         Breadth-first: computes .neighbors for every node in the tree.
         Root gets {root}. Children at depth d+1 use only info from depth d.
@@ -406,16 +401,21 @@ class FMMTree:
             #------------------------------------------------------
             #---------- compute neighbors for this level -------------
             for node in this_level:
-                self.find_near_neighbors(node, pad=pad)
+                self._find_near_neighbors(node, pad=pad)
             #------------------------------------------------------
             #---------- gather next level nodes -------------------
             next_level = [child for parent in this_level for child in self._iter_children(parent)]
             q.extend(next_level)
             #-----------------------------------------------------
 
+    def make_lists(self, pad: float = 1.01):
+        """Public helper: compute neighbor lists and interaction lists for the tree."""
+        self._make_near_neighbors_lists(pad=pad)
+        self._compute_all_interaction_lists()
 
 
-    def rebuild_node_list(self):
+
+    def _rebuild_node_list(self):
         """Rebuild self.node_list using BFS from the root."""
         self.node_list = []
         if self.root is None:
@@ -428,79 +428,25 @@ class FMMTree:
                 if c is not None:
                     q.append(c)
 
-    def prune_tree(self):
-        """Prune small children: starting from second-lowest level, collapse parents whose
-        children contain too few points. If any child has fewer than `min_leaf_size` points,
-        the parent reclaims all particle indices from its children and the children are removed.
-
-        After pruning, the node list and near-neighbor lists are rebuilt.
-        """
-
-        #TODO - does not properly set nearest nbors after pruning
 
 
-        # collect nodes by level
-        levels = {}
-        stack = [self.root]
-        while stack:
-            node = stack.pop()
-            if node is None:
-                continue
-            levels.setdefault(node.level, []).append(node)
-            for c in getattr(node, "children", ()):  # type: ignore
-                if c is not None:
-                    stack.append(c)
-
-        if not levels:
+    def construct_moments(self):
+        """Construct multipole expansions for all nodes in the tree."""
+        if self.root is None:
             return
-
-        max_lvl = max(levels.keys())
-        second_lowest = max_lvl - 1
-        # iterate from second-lowest down to root
-        for lvl in range(second_lowest, -1, -1):
-            for node in levels.get(lvl, []):
-                children = getattr(node, "children", ())
-                if not children:
-                    continue
-                # if any child has fewer than min_leaf_size, collapse
-                collapse = False
-                for child in children:
-                    if child is None:
-                        continue
-                    child_num = getattr(child, "num_points", None)
-                    if child_num is None:
-                        child_num = 0 if getattr(child, "indices", None) is None else len(child.indices)
-                    if child_num < self.min_leaf_size:
-                        collapse = True
-                        break
-                if collapse:
-                    # collect indices from children
-                    inds = [c.indices for c in children if c is not None and getattr(c, "indices", None) is not None]
-                    if inds:
-                        all_indices = np.concatenate(inds)
-                    else:
-                        all_indices = np.array([], dtype=int)
-                    node.indices = all_indices
-                    node.num_points = len(all_indices)
-                    node.is_leaf = True
-                    # remove children
-                    node.children = [None] * len(children)
-
-        # rebuild node list and recompute neighbor lists
-        self.rebuild_node_list()
-        self.make_near_neighbors_lists()
+        self._upwards_pass(self.root)
+        self._downwards_pass(self.root)
 
 
-
-
-    def upwards_pass(self, node: TreeNode):
+    def _upwards_pass(self, node: TreeNode):
         """
         Computes multipole expansions from leaves up to root (P2M and M2M).
         """
         #---------- recurse on children first -------------
         # Must be done first to ensure finer levels are computed before coarser levels
         for child in node.children:
-            self.upwards_pass(child)
+            if child is not None:
+                self._upwards_pass(child)
         #--------------------------------------------------
         if node.is_leaf:
             #------------ if leaf, compute P2M ot get moments -------------
@@ -521,3 +467,34 @@ class FMMTree:
             #------------------------------------------------------------------
 
 
+    def _downwards_pass(self, node: TreeNode):
+        """
+        Creates the full octree structure (replaces make_children_recursively),
+        but builds level-by-level instead of depth-first recursion.
+        """
+        #self.node_list = []  # we now fill this BFS-ordered
+
+        # Queue for BFS
+        q = deque([node])
+        while q:
+            #-------------- get next node ----------------
+            node = q.popleft()
+            #---------------------------------------------
+            #------------------ convert multipole to local for each node in interaction list -------------------
+            for i_node in node.interaction:
+                if node.L is None:
+                    node.L = np.zeros(((self.p+1)**2,), dtype=np.complex128)
+                node.L += moment.M2L_sphe(i_node.M, i_node.center, node.center)
+            #----------------------------------------------------------------------------------------------------
+            #-------------- if this is a leaf continue to next node in queue -------------------
+            if node.is_leaf:
+                continue
+            #----------------------------------------------------------------------------------
+            #------ propagate local expansions to children (L2L) ------------------------------------------------
+            for child in node.children:
+                if child is None:
+                    continue
+                if node.L is not None:
+                    child.L = moment.L2L_sphe(node.L, node.center, child.center)
+                q.append(child)
+            #----------------------------------------------------------------------------------------------------
