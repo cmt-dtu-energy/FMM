@@ -282,6 +282,60 @@ class FMMTree:
                 return None
         return node
 
+    def compute_interaction_list(self, node: TreeNode):
+        """Compute and return the interaction list for `node`.
+
+        Definition (informal): children of the near-neighbours of node's parent
+        which are at the same level as node and are well-separated from node
+        (i.e., not near neighbours of node).
+        """
+        if node is None or node.parent is None:
+            return set()
+
+        parent = node.parent
+        # ensure neighbor lists exist for parent
+        if not hasattr(parent, 'neighbors') or not parent.neighbors:
+            # build global neighbor lists (cheap if already built)
+            self.make_near_neighbors_lists()
+
+        interaction = set()
+        # ensure node.neighbors exists
+        if not hasattr(node, 'neighbors') or not node.neighbors:
+            self.find_near_neighbors(node)
+
+        for Pn in getattr(parent, 'neighbors', ()):  # type: ignore
+            # skip if neighbour has no children
+            for child in getattr(Pn, 'children', ()):  # type: ignore
+                if child is None:
+                    continue
+                # only consider children at the same level as node
+                if getattr(child, 'level', None) != getattr(node, 'level', None):
+                    continue
+                # exclude near neighbours of node (we want well-separated boxes only)
+                if child in getattr(node, 'neighbors', ()):  # type: ignore
+                    continue
+                # finally, check adjacency using is_near_neighbor to be safe
+                if not self.is_near_neighbor(child, node):
+                    interaction.add(child)
+
+        # store on node for later use
+        node.interaction = interaction
+        return interaction
+
+    def compute_all_interaction_lists(self):
+        """Compute interaction lists for all nodes in the tree and store them as node.interaction."""
+        if not self.node_list:
+            self.rebuild_node_list()
+        # ensure neighbor lists are present
+        for node in self.node_list:
+            node.interaction = self.compute_interaction_list(node)
+
+
+    def make_lists(self):
+        """Build both near-neighbor lists and interaction lists for all nodes in the tree."""
+        self.make_near_neighbors_lists()
+        self.compute_all_interaction_lists()
+
     def is_near_neighbor(self, node_a: TreeNode, node_b: TreeNode, pad: float = 1.01) -> bool:
         """
         Axis-aligned bounding boxes touch/overlap test.
@@ -437,6 +491,8 @@ class FMMTree:
         self.make_near_neighbors_lists()
 
 
+
+
     def upwards_pass(self, node: TreeNode):
         """
         Computes multipole expansions from leaves up to root (P2M and M2M).
@@ -462,6 +518,6 @@ class FMMTree:
                 x1 = node.center
                 x0 = child.center
                 node.M += moment.M2M_sphe(child.M, x0, x1)
-            #---------------------------------------------------------------
+            #------------------------------------------------------------------
 
 
