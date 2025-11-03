@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 import itertools
 from platform import node
+import warnings
 #-----------------------------------------------------------------------------
 
 
@@ -52,7 +53,10 @@ class TreeNode:
         self.L = None   # local coefficients
 
 class FMMTree:
-    """Tree driver to build octree, compute multipoles (P2M/M2M), translate (M2L), and down-pass (L2L)."""
+    """
+    Tree structure for Fast Multipole Method (FMM).
+    Holds global point data and builds the octree/quadtree structure.
+    """
     def __init__(self,
                  center: np.ndarray,
                  size : np.ndarray,
@@ -60,47 +64,57 @@ class FMMTree:
                  charges: np.ndarray,
                  p: int = 4,
                  min_leaf_size: int = 10,
-                 max_level: int = 5):
+                 max_level: int = 5,
+                 collapse_tol: float = 1e-6):
         """
         points: (N,3) source/target coordinates
         charges: (N,) source strengths (if shared source/target)
         """
+
+        #----------- the tree itself stores data ---------------------
         self.points = np.asarray(points)
         self.charges = np.asarray(charges)
-        self.center = np.asarray(center)
-        self.size = np.asarray(size)
-        # minimum number of points per leaf; if a child has fewer than
-        # this many points the parent may reclaim them during pruning
-        self.min_leaf_size = int(min_leaf_size)
-        self.max_level = int(max_level)
+        #-------------------------------------------------------------
+        #-------------- geometric parameters ----------------------
+        self.center = np.asarray(center)            # center of the root box
+        self.size = np.asarray(size)                # size of the root box
+        self.collapse_tol = collapse_tol            # tolerance for collapsing near-zero dimensions
+        self.do_dimension = [True, True, True]      # active dimensions
+        #-------------------------------------------------------------
+        #---------------- tree construction parameters ----------------
+        self.min_leaf_size = int(min_leaf_size)     # minimum number of points per leaf - only used during pruning
+        self.max_level = int(max_level)             # maximum tree depth
+        #-----------------------------------------------------------
+        #----------------- multipole parameters -------------------
+        self.p = p  # multipole order
+        #-----------------------------------------------------------
+        #------------- node storage ----------------------
         self.root: Optional[TreeNode] = None
         self.node_list : List[TreeNode] = []
-        self.p = p  # multipole order
-        # tolerance for collapsing near-zero dimensions; dimensions with
-        # size <= collapse_tol are considered collapsed (ignored)
-        self.collapse_tol = 1e-6
-        # default do_dimension (all true) — will be updated in build_tree
-        self.do_dimension = [True, True, True]
+        #-------------------------------------------------
 
 
     def build_tree(self, BFS: bool = True):
         """
-        Builds the octree structure recursively.
-        1. Create root node containing all points.
-        2. Recursively subdivide nodes until max level or leaf size reached.
-        3. Store nodes in self.node_list in depth-first order.
+        Build tree structure down to max_level.
+        input:
+            BFS : bool - if True, build tree breadth-first; else depth-first
         """
-        # decide which dimensions are active (collapsed dims are ignored)
+
+        #------------- check active dimensions --------------------------------
         sz = np.asarray(self.size, dtype=float)
         do_dim = [bool(s > self.collapse_tol) for s in sz]
-        # ensure at least one dimension remains active
+        #----------------------------------------------------------------------
+        #--------------- ensure at least one dimension remains active ---------
         if not any(do_dim):
             raise ValueError(
                 "All dimensions are collapsed (size <= collapse_tol); provide a non-zero "
                 "size in at least one dimension or decrease collapse_tol."
             )
+        #-----------------------------------------------------------------------
+        #-------------- store active dimensions --------------------------------
         self.do_dimension = do_dim
-
+        #------------------------------------------------------------------------
         #--------------- first create root node ---------------
         root_node = TreeNode(
             tree=self,
@@ -124,19 +138,31 @@ class FMMTree:
     def _make_child(self, node: TreeNode, child_center: np.ndarray) -> TreeNode:
         """
         Creates a single child node
+        input:
+            node: TreeNode - the parent node
+            child_center: np.ndarray - the center of the child node
+        output:
+            child_node: TreeNode - the created child node
         """
-        # Determine which points belong to this child.
-        # Only consider active (non-collapsed) dimensions when testing membership.
-        active = np.asarray(self.do_dimension, dtype=bool)
+        #--------------- get half_width of child node ------------------------------
         child_half = node.half_width / 2.0
+        #---------------------------------------------------------------------------
+        #--------------- determine which points belong to this child ---------------
+            #--------- calculate differences between point and child center --------
         diffs = np.abs(self.points[node.indices] - child_center)
+            #------------------------------------------------------------------------
+            #----create mask for points inside child using only active dimensions ---
+        active = np.asarray(self.do_dimension, dtype=bool)
         if active.all():
             in_child_mask = np.all(diffs <= child_half, axis=1)
         else:
-            # compare only along active dimensions
             in_child_mask = np.all(diffs[:, active] <= child_half[active], axis=1)
+            #---------------------------------------------------------------------------
+            #------------- get indices of points inside this child --------------------
         child_indices = node.indices[in_child_mask]
-        # Create the child node
+            #---------------------------------------------------------------------------
+        #-------------------------------------------------------------------------------
+        #------------------ create child node ------------------------------------------
         child_node = TreeNode(
             tree=self,
             center=child_center,
@@ -144,57 +170,72 @@ class FMMTree:
             indices=child_indices,
             level=node.level + 1
         )
+        #----------------------------------------------------------------------------
+        #------------------ set parent of child node -------------------------------
         child_node.parent = node
+        #----------------------------------------------------------------------------
         return child_node
 
     def _make_children_BFS(self, node: TreeNode):
         """
-        Creates the full octree structure (replaces make_children_recursively),
-        but builds level-by-level instead of depth-first recursion.
+        Populates the tree in breadth-first manner - e.i. no recursion.
+        input: node: TreeNode - the starting node (usually the root)
         """
-        #self.node_list = []  # we now fill this BFS-ordered
-
-        # Queue for BFS
+        #------------- create queue for BFS -----------------------------------------
         q = deque([node])
-
+        #----------------------------------------------------------------------------
+        #------------- while queue not empty, process nodes -------------------------
         while q:
+            #----------------- pop next node from queue ------------------------------
             node = q.popleft()
-
-            # Add to global list
+            #--------------------------------------------------------------------------
+            #-------------- add node to tree list of nodes ----------------------------
             self.node_list.append(node)
-
-            # Stop if max level reached
+            #--------------------------------------------------------------------------
+            #--------------- stop if max level reached --------------------------------
             if node.level >= self.max_level:
                 node.is_leaf = True
                 continue
-
-            # Split current node
+            #---------------------------------------------------------------------------
+            #--------------- split current node ----------------------------------------
+                #------------ first set is_leaf to False ------------------------------
             node.is_leaf = False
-
-            # Create children nodes. Use only active dimensions when forming combinations.
+                #----------------------------------------------------------------------
+                #-- determine number of children based on active dimensions -----------
             active_dims = [d for d, flag in enumerate(self.do_dimension) if flag]
             n_children = 2 ** len(active_dims)
-            # ensure children list has correct length
             node.children = [None] * n_children
+                #--------------------------------------------------------------------------
+                #--------------- create children nodes ---------------------------------
             for idx, signs in enumerate(itertools.product([-1, 1], repeat=len(active_dims))):
+                    #--------- compute child center ------------------------------------
                 child_center = node.center.copy()
+                    #-------------------------------------------------------------------
+                    #---------- only adjust active dimensions --------------------------
                 for d, s in zip(active_dims, signs):
                     child_center[d] += 0.5 * node.half_width[d] * s
+                    #-------------------------------------------------------------------
+                    #--------------- create child node -------------------------------
                 child_node = self._make_child(node, child_center)
+                    #-----------------------------------------------------------------
+                    #-------------- update parent child list with new child --------------
                 node.children[idx] = child_node
-                # Add to queue for future splitting
+                    #----------------------------------------------------------------------
+                    #--------------- add child to queue for future splitting -------------
                 q.append(child_node)
-
-            # Free memory on internal node
-            node.indices = []  # same as your original
+                    #-------------------------------------------------------------------
+                #---------------------------------------------------------------------------
+            #--------------------------------------------------------------------------------
+            #--------- delete indices from non-leaf nodes to save memory ------------------
+            node.indices = [] 
+            #-------------------------------------------------------------------------------
+        #--------------------------------------------------------------------------------
 
     def _make_children_DFS(self, node: TreeNode):
         """
         Recursively creates child nodes for the octree.
         """
         #-------------- append node to global list --------------
-        #TODO - decide if we want a different ordering here
-        #       curently it is depth-first, but maybe we want breadth-first?
         self.node_list.append(node)
         #--------------------------------------------------------
         #-------------- return once max level is reached --------------
@@ -232,38 +273,71 @@ class FMMTree:
 
 
     def _iter_children(self, node) -> Iterable:
+        """
+        Yield children of `node` - a wrapper to avoid repeating code.
+        input:
+            node: TreeNode - the parent node
+        output:
+            list of child nodes of `node`
+        """
+        #----------------- get children -----------------------
         ch = getattr(node, "children", None)
+        #------------------------------------------------------
+        #--------------- return if no children -------------------
         if not ch:
             return
+        #-----------------------------------------------------
+        #------------- yield children ------------------------
         for c in ch:
             if c is not None:
                 yield c
+        #-----------------------------------------------------
 
     def find_leaf_for_point(self, point) -> Optional[TreeNode]:
-        """Return the leaf node that contains `point` or None if point is outside the root.
-
-        `point` can be an iterable or array with 1-3 elements; only active dimensions
-        (self.do_dimension) are considered. If the point is outside the root domain
-        along any active dimension, returns None.
         """
+        Find the leaf node that contains the point.
+        input: 
+            point: array-like with 1-3 elements representing a point in space
+        output:
+            node : TreeNode | None
+        """
+        #--------------- first check if root exists ----------------
         if self.root is None:
             return None
+        #----------------------------------------------------------
 
+        #--------------- convert point to array -------------------
         p = np.asarray(point, dtype=float)
+        #----------------------------------------------------------
+        #--------------- get active dimensions -------------------
         do_dim = np.asarray(self.do_dimension, dtype=bool)
-        # allow 1D/2D/3D input matching active dims
+        #----------------------------------------------------------
+
+        #--------------- handle point dimensionality ----------------
         if p.ndim == 0:
             p = np.asarray([p])
-        if p.size != do_dim.sum():
-            # try to accept full 3-element points by picking active dims
+        #------------------------------------------------------------
+
+
+        #------------- cast point to full 3-vector ----------------------------
+            #---------if point dimensionality does not match active dims ------
+        if p.size != do_dim.sum(): 
+                # ----- try to accept by casting to 3D ------------------------
             if p.size == 3:
                 full_p = p
+                #--------------------------------------------------------------
+                #--------- otherwise return None ------------------------------
             else:
+                warnings.warn("Point dimensionality does not match active dimensions; returning None.", UserWarning)
                 return None
+                #--------------------------------------------------------------
+            #------------------------------------------------------------------
+            #---------- else fill full 3D point -------------------------------
         else:
-            # expand p to full 3-vector using active dims
             full_p = np.zeros(3, dtype=float)
             full_p[do_dim] = p
+            #-------------------------------------------------------------------
+        #-----------------------------------------------------------------------
 
         # check inside root
         root = self.root
